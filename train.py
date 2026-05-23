@@ -42,7 +42,7 @@ from mlflow_utils import setup_mlflow, log_training_run
 
 def parse_args():
     p = argparse.ArgumentParser(description="Gold Price Predictor — Training Script")
-    p.add_argument("--period",  default="max",  help="yfinance data period (1y, 2y, 5y, max)")
+    p.add_argument("--period",  default="2y",  help="yfinance data period (1y, 2y, 5y, max)")
     p.add_argument("--test",    default=0.20,   type=float, help="Test set fraction (default 0.20)")
     p.add_argument("--tune",    action="store_true",        help="Run Optuna tuning before training")
     p.add_argument("--trials",  default=30,     type=int,   help="Number of Optuna trials (default 30)")
