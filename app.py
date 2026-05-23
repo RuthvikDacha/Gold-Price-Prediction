@@ -284,12 +284,14 @@ with st.sidebar:
 
     st.markdown("#### 🏷️ MLflow Run Label")
     run_label = st.text_input(
-        "Your Name / Label",
+        "MLflow Run Label",
         value="",
-        placeholder="e.g. Ruthvik or Test-Run-1",
-        help="Tag your MLflow run so you can identify it later — "
-             "especially useful if multiple people use the app.",
+        placeholder="e.g. TestRun-1 or XGB-Macro-Test",
+        help="Give this training run a label so you can find it in the MLflow / DagsHub UI. "
+             "Your run will be saved as: YourLabel__ModelType__Timestamp",
     )
+    st.caption("💡 This exact label will appear as the run name in DagsHub — "
+               "useful when multiple people use the app.")
 
     st.markdown("---")
     train_btn = st.button("🚀  Train Model", use_container_width=True)
@@ -377,7 +379,7 @@ if train_btn:
 
     # Build a unique run name using the user's label so they can
     # find their run in DagsHub / MLflow UI immediately
-    label      = run_label.strip() if run_label.strip() else "anonymous"
+    label      = run_label.strip() if run_label.strip() else "TestRun"
     named_run  = f"{label}__{model_choice.replace(' ', '_')}__{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     run_id = log_training_run(
