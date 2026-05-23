@@ -1,0 +1,50 @@
+# .gitignore
+# Files and folders that should never be pushed to GitHub.
+# mlruns/ and .streamlit/secrets.toml are the two most important ones —
+# mlruns gets regenerated automatically, and secrets.toml contains
+# credentials that must never be committed to a public repo.
+
+# MLflow experiment runs — auto-generated locally, not needed in the repo
+mlruns/
+
+# Streamlit secrets — contains API keys, passwords, and tokens
+# NEVER commit this file. Add your credentials here locally only.
+.streamlit/secrets.toml
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Environment variable files
+.env
+.env.local
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+Thumbs.db
+desktop.ini
+
+# Jupyter notebooks (not part of this project)
+.ipynb_checkpoints/
+*.ipynb
+
+# Distribution and packaging
+dist/
+build/
+*.egg-info/
+
+# Temporary files created during training
+_fi_tmp.csv
+
+# IDE folders
+.vscode/
+.idea/
