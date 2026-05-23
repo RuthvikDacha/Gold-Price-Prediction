@@ -267,8 +267,3 @@ affect what the model outputs.
 - Add more macro features (CPI releases, Fed meeting dates as binary flags)
 - Multi-step forecasting (predict 5 or 7 days ahead instead of just 1)
 
----
-
-## License
-
-MIT — free to use, modify, and build on.
