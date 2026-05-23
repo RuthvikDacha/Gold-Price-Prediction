@@ -52,18 +52,21 @@ def log_training_run(
     metrics: dict,
     feature_importance_df: pd.DataFrame,
     include_macro: bool = True,
-    period: str = "max",
+    period: str = "2y",
+    run_name: str = None,
 ) -> str:
     """
-    Logs a complete training run to MLflow. Every time the model is retrained
-    a new run is created so I can track how metrics change over time and
-    compare Random Forest vs XGBoost side by side.
+    Logs a complete training run to MLflow.
 
-    Saves: hyperparameters, RMSE/MAE/R²/MAPE, the trained model artifact,
-    feature importance CSV, and some metadata about the training config.
+    The run_name is set by the user in the sidebar so they can find their
+    specific run in DagsHub or the local MLflow UI — especially useful when
+    multiple people use the same app. The format is:
+        YourName__Random_Forest__20260523_143022
     """
     setup_mlflow()
-    run_name = f"{model_type.replace(' ', '_')}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+
+    if not run_name:
+        run_name = f"{model_type.replace(' ', '_')}__{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
 
     try:
         with mlflow.start_run(run_name=run_name) as run:
