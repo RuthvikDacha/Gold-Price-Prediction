@@ -14,8 +14,7 @@ import os
 from data        import fetch_gold_data, fetch_macro_data, merge_with_macro, \
                         engineer_features, prepare_data, get_feature_columns
 from model       import train_model, evaluate_model, get_feature_importance, \
-                        predict_next_day, predict_multi_step, \
-                        save_model, load_model, list_saved_models
+                        predict_next_day, predict_multi_step
 from mlflow_utils import log_training_run, get_run_history, get_best_run, setup_mlflow
 from tuning      import run_tuning
 from monitoring  import run_full_monitoring, psi_status
@@ -179,6 +178,7 @@ _defaults = dict(
     mlflow_backend="local",
     shap_explainer=None, shap_expected=None, shap_values=None,
     forecast_df=None,
+    run_name=None, run_label="",
 )
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -237,214 +237,86 @@ with st.sidebar:
       <span style='color:#FFD700;font-size:17px;font-weight:800;letter-spacing:.5px;'>
         Gold Predictor
       </span><br>
-      <span style='color:#475569;font-size:11px;'>v3.0 — ML + Monitoring + AutoRetrain</span>
+      <span style='color:#475569;font-size:11px;'>v3.0 — ML + Monitoring</span>
     </div>
     """, unsafe_allow_html=True)
     st.markdown("---")
 
-    # ── Mode selector — two clearly separated options ─────────────────────────
-    st.markdown("#### Select Mode")
-    mode = st.radio(
-        "mode",
-        ["⚡ Load Pre-trained Model", "🚀 Train Live"],
-        label_visibility="collapsed",
-        help="Pre-trained: instant, uses model saved by GitHub Actions.\n"
-             "Train Live: fetches fresh data and trains a new model now.",
+    st.markdown("#### ⚙️ Model Settings")
+
+    model_choice = st.selectbox(
+        "ML Algorithm",
+        ["Random Forest", "XGBoost"],
+        help="Random Forest: stable and interpretable.\n"
+             "XGBoost: usually more accurate.",
+    )
+
+    period_choice = st.selectbox(
+        "Historical Data Range",
+        ["1y", "2y", "3y", "4y", "5y"],
+        index=1,
+        help="How much historical gold price data to train on.",
+    )
+
+    test_size_choice = st.slider(
+        "Test Set Size", 0.10, 0.30, 0.20, 0.05,
+        help="Fraction of data reserved for evaluation only.",
+    )
+
+    st.markdown("#### 🔬 Feature & Tuning Options")
+
+    include_macro = st.toggle(
+        "Include Macro Features", value=True,
+        help="Adds USD index, Treasury yields, oil, S&P 500, and VIX.",
+    )
+
+    use_tuning = st.toggle(
+        "Optuna Hyperparameter Tuning", value=False,
+        help="Searches for the best model parameters automatically. "
+             "Adds 2–5 minutes but usually improves RMSE.",
+    )
+
+    if use_tuning:
+        n_trials = st.slider("Optuna Trials", 10, 50, 20, 10,
+                             help="More trials = better params but longer wait.")
+    else:
+        n_trials = 20
+
+    st.markdown("#### 🏷️ MLflow Run Label")
+    run_label = st.text_input(
+        "Your Name / Label",
+        value="",
+        placeholder="e.g. Ruthvik or Test-Run-1",
+        help="Tag your MLflow run so you can identify it later — "
+             "especially useful if multiple people use the app.",
     )
 
     st.markdown("---")
+    train_btn = st.button("🚀  Train Model", use_container_width=True)
+    load_btn  = False  # pre-trained mode removed
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # MODE A — LOAD PRE-TRAINED
-    # ══════════════════════════════════════════════════════════════════════════
-    if mode == "⚡ Load Pre-trained Model":
-        saved     = list_saved_models()
-        any_saved = any(saved.values())
-
-        st.markdown("#### ⚡ Pre-trained Models")
-        st.caption(
-            "These models are trained automatically every weekday at 6am UTC "
-            "by GitHub Actions and saved to the repo. Loading is instant — "
-            "no training required."
-        )
-
-        if any_saved:
-            for mt, exists in saved.items():
-                icon = "✅" if exists else "❌"
-                st.caption(f"{icon} {mt}")
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            pretrain_model_choice = st.selectbox(
-                "Which model to load",
-                [mt for mt, exists in saved.items() if exists],
-                help="Select which pre-trained model you want to load.",
-            )
-
-            load_btn  = st.button("⚡  Load Pre-trained Model",
-                                  use_container_width=True)
-            train_btn = False
-            model_choice      = pretrain_model_choice
-            period_choice     = "2y"
-            test_size_choice  = 0.20
-            include_macro     = True
-            use_tuning        = False
-            n_trials          = 30
-        else:
-            st.warning(
-                "No pre-trained models found yet.\n\n"
-                "GitHub Actions trains them automatically every weekday at 6am UTC. "
-                "You can also trigger it manually from the Actions tab in your GitHub repo.",
-                icon="⚠️",
-            )
-            load_btn          = False
-            train_btn         = False
-            model_choice      = "Random Forest"
-            period_choice     = "2y"
-            test_size_choice  = 0.20
-            include_macro     = True
-            use_tuning        = False
-            n_trials          = 30
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # MODE B — TRAIN LIVE
-    # ══════════════════════════════════════════════════════════════════════════
-    else:
-        st.markdown("#### 🚀 Live Training Settings")
-        st.caption(
-            "Fetches the latest gold price and macro data right now and "
-            "trains a fresh model. Takes 1–5 minutes depending on settings."
-        )
-
-        model_choice = st.selectbox(
-            "ML Algorithm",
-            ["Random Forest", "XGBoost"],
-            help="Random Forest: stable and interpretable.\n"
-                 "XGBoost: usually more accurate.",
-        )
-
-        period_choice = st.selectbox(
-            "Historical Data Range",
-            ["2y", "5y", "10y", "15y", "max"],
-            index=0,
-            help="How much historical data to train on.",
-        )
-
-        test_size_choice = st.slider(
-            "Test Set Size", 0.10, 0.30, 0.20, 0.05,
-            help="Fraction of data reserved for evaluation only.",
-        )
-
-        st.markdown("#### 🔬 Feature & Tuning Options")
-
-        include_macro = st.toggle(
-            "Include Macro Features", value=True,
-            help="Adds USD index, Treasury yields, oil, S&P 500, and VIX.",
-        )
-
-        use_tuning = st.toggle(
-            "Optuna Hyperparameter Tuning", value=False,
-            help="Searches for the best model parameters automatically. "
-                 "Adds 2–5 minutes but usually improves RMSE.",
-        )
-
-        if use_tuning:
-            n_trials = st.slider("Optuna Trials", 10, 100, 30, 10,
-                                 help="More trials = better params but longer wait.")
-        else:
-            n_trials = 30
-
-        st.markdown("---")
-        train_btn = st.button("🚀  Train Model Now", use_container_width=True)
-        load_btn  = False
-
-    # ── Active model status badge ─────────────────────────────────────────────
     if st.session_state.trained:
         st.markdown("---")
-        src = st.session_state.get("load_source", "manual")
-        if src == "pretrained":
-            st.success("⚡ Pre-trained model active")
-        else:
-            st.success("✅ Live-trained model active")
+        st.success("✅  Model ready")
         st.caption(f"Algorithm: **{st.session_state.model_type}**")
         if st.session_state.metrics:
             m = st.session_state.metrics
             st.caption(f"RMSE **${m['rmse']:.2f}** · R² **{m['r2']:.4f}**")
         if st.session_state.last_trained:
             st.caption(f"Trained: {st.session_state.last_trained}")
+        if st.session_state.run_name:
+            st.info(f"MLflow run name:\n`{st.session_state.run_name}`", icon="🏷️")
         if st.session_state.mlflow_backend == "dagshub":
             st.info("📡 Logging to DagsHub", icon="📡")
+        else:
+            st.caption("MLflow: local (mlruns/)")
 
     st.markdown("---")
     st.caption("Data: Yahoo Finance · GC=F")
     st.caption("Stack: scikit-learn · XGBoost\nMLflow · Optuna · scipy · VADER")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LOAD PRE-TRAINED MODEL PIPELINE
-# ══════════════════════════════════════════════════════════════════════════════
-if load_btn:
-    bar = st.progress(0, "Loading pre-trained model…")
-    loaded_model, loaded_metrics, loaded_features, loaded_meta = \
-        load_model(model_choice)
-
-    if loaded_model is None:
-        st.error(f"No pre-trained {model_choice} found in models/ folder.")
-    else:
-        bar.progress(30, "Fetching latest gold data for predictions…")
-        df_raw = fetch_gold_data("2y")
-        st.session_state.df_raw = df_raw
-
-        bar.progress(55, "Fetching macro data…")
-        macro_df  = fetch_macro_data("2y")
-        df_merged = merge_with_macro(df_raw, macro_df)
-
-        bar.progress(70, "Engineering features…")
-        df_features = engineer_features(df_merged, include_macro=True)
-        st.session_state.df_features = df_features
-
-        # Rebuild X_test from the last 20% of data for monitoring + performance tab
-        X_train, X_test, y_train, y_test, test_df, _ = \
-            prepare_data(df_features, 0.20, True)
-
-        predictions  = loaded_model.predict(X_test)
-        train_preds  = loaded_model.predict(X_train)
-        loaded_metrics["predictions"] = predictions
-
-        bar.progress(90, "Computing SHAP values…")
-        if SHAP_AVAILABLE:
-            explainer, expected_val = get_explainer(loaded_model, X_train, model_choice)
-            shap_vals = compute_shap_values(explainer, X_test)
-        else:
-            explainer, expected_val, shap_vals = None, None, None
-
-        st.session_state.update(dict(
-            trained=True,
-            model=loaded_model,
-            model_type=loaded_meta["model_type"],
-            params={},
-            metrics=loaded_metrics,
-            X_train=X_train, X_test=X_test,
-            y_train=y_train, y_test=y_test,
-            test_df=test_df,
-            predictions=predictions,
-            train_preds=train_preds,
-            feature_names=loaded_features,
-            shap_explainer=explainer,
-            shap_expected=expected_val,
-            shap_values=shap_vals,
-            monitoring_results=None,
-            forecast_df=None,
-            last_trained=loaded_meta.get("trained_at", "Unknown"),
-            mlflow_backend="local",
-            load_source="pretrained",
-        ))
-
-        bar.progress(100, "Done!")
-        st.toast(f"⚡ {loaded_meta['model_type']} loaded successfully!", icon="⚡")
-        st.rerun()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MANUAL TRAINING PIPELINE
+# TRAINING PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 if train_btn:
     bar = st.progress(0, "Fetching gold price data…")
@@ -453,7 +325,7 @@ if train_btn:
     bar.progress(15, "Fetching macro indicators…" if include_macro else "Skipping macro…")
 
     if include_macro:
-        macro_df = fetch_macro_data(period_choice)
+        macro_df  = fetch_macro_data(period_choice)
         df_merged = merge_with_macro(df_raw, macro_df)
     else:
         df_merged = df_raw.copy()
@@ -493,21 +365,29 @@ if train_btn:
     ))
 
     bar.progress(72, "Evaluating model…")
-    metrics           = evaluate_model(model, X_test, y_test)
-    train_preds       = model.predict(X_train)
+    metrics      = evaluate_model(model, X_test, y_test)
+    train_preds  = model.predict(X_train)
     st.session_state.metrics      = metrics
     st.session_state.predictions  = metrics["predictions"]
     st.session_state.train_preds  = train_preds
 
-    bar.progress(88, "Logging to MLflow & saving model…")
+    bar.progress(88, "Logging to MLflow…")
     fi_df   = get_feature_importance(model, feature_names)
     backend = setup_mlflow()
-    run_id  = log_training_run(model, model_choice, params, metrics, fi_df,
-                               include_macro, period_choice)
-    save_model(model, model_choice, metrics, feature_names, params)
-    st.session_state.run_id          = run_id
-    st.session_state.mlflow_backend  = backend
-    st.session_state.load_source     = "manual"
+
+    # Build a unique run name using the user's label so they can
+    # find their run in DagsHub / MLflow UI immediately
+    label      = run_label.strip() if run_label.strip() else "anonymous"
+    named_run  = f"{label}__{model_choice.replace(' ', '_')}__{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    run_id = log_training_run(
+        model, model_choice, params, metrics, fi_df,
+        include_macro, period_choice,
+        run_name=named_run,
+    )
+    st.session_state.run_id         = run_id
+    st.session_state.run_name       = named_run
+    st.session_state.mlflow_backend = backend
 
     bar.progress(94, "Computing SHAP values…")
     if SHAP_AVAILABLE:
@@ -521,12 +401,13 @@ if train_btn:
         st.session_state.shap_expected  = None
         st.session_state.shap_values    = None
 
-    st.session_state.monitoring_results = None   # reset on retrain
-    st.session_state.last_trained = datetime.now().strftime("%Y-%m-%d %H:%M")
-    st.session_state.trained      = True
+    st.session_state.monitoring_results = None
+    st.session_state.forecast_df        = None
+    st.session_state.last_trained       = datetime.now().strftime("%Y-%m-%d %H:%M")
+    st.session_state.trained            = True
 
     bar.progress(100, "Done!")
-    st.toast("✅ Model trained and logged to MLflow!", icon="🥇")
+    st.toast(f"✅ Model trained! Your MLflow run name: {named_run}", icon="🥇")
     st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
