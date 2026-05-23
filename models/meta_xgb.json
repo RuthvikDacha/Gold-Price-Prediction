@@ -1,0 +1,47 @@
+{
+  "model_type": "XGBoost",
+  "metrics": {
+    "rmse": 1095.5881,
+    "mae": 633.7896,
+    "r2": -0.3839,
+    "mape": 17.8727
+  },
+  "feature_names": [
+    "lag_1",
+    "lag_2",
+    "lag_3",
+    "lag_5",
+    "lag_10",
+    "rolling_mean_7",
+    "rolling_mean_20",
+    "rolling_mean_50",
+    "rolling_std_7",
+    "rolling_std_20",
+    "rolling_std_50",
+    "momentum_5",
+    "pct_change_1",
+    "pct_change_5",
+    "high_low_spread",
+    "open_close_diff",
+    "day_of_week",
+    "month",
+    "year",
+    "dxy_close",
+    "dxy_change_1",
+    "tnx_close",
+    "oil_close",
+    "oil_change_1",
+    "sp500_change_1",
+    "vix_close"
+  ],
+  "params": {
+    "n_estimators": "200",
+    "max_depth": "6",
+    "learning_rate": "0.05",
+    "subsample": "0.8",
+    "colsample_bytree": "0.8",
+    "random_state": "42",
+    "verbosity": "0"
+  },
+  "trained_at": "2026-05-23 23:07 UTC"
+}
