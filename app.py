@@ -17,6 +17,8 @@ from model       import train_model, evaluate_model, get_feature_importance, pre
 from mlflow_utils import log_training_run, get_run_history, get_best_run, setup_mlflow
 from monitoring  import run_full_monitoring, psi_status
 from sentiment   import get_gold_news_sentiment
+from shap_utils  import (get_explainer, compute_shap_values, get_waterfall_data,
+                          get_summary_data, LABEL_MAP, SHAP_AVAILABLE)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE SETUP
@@ -172,6 +174,7 @@ _defaults = dict(
     run_id=None, feature_names=None,
     monitoring_results=None, last_trained=None,
     mlflow_backend="local",
+    shap_explainer=None, shap_expected=None, shap_values=None,
 )
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -332,6 +335,18 @@ if train_btn:
     st.session_state.run_id          = run_id
     st.session_state.mlflow_backend  = backend
 
+    bar.progress(94, "Computing SHAP values…")
+    if SHAP_AVAILABLE:
+        explainer, expected_val = get_explainer(model, X_train, model_choice)
+        shap_vals = compute_shap_values(explainer, X_test)
+        st.session_state.shap_explainer = explainer
+        st.session_state.shap_expected  = expected_val
+        st.session_state.shap_values    = shap_vals
+    else:
+        st.session_state.shap_explainer = None
+        st.session_state.shap_expected  = None
+        st.session_state.shap_values    = None
+
     st.session_state.monitoring_results = None   # reset on retrain
     st.session_state.last_trained = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.session_state.trained      = True
@@ -389,6 +404,9 @@ test_df      = st.session_state.test_df
 X_train      = st.session_state.X_train
 X_test       = st.session_state.X_test
 feature_names = st.session_state.feature_names
+shap_explainer = st.session_state.shap_explainer
+shap_expected  = st.session_state.shap_expected
+shap_values    = st.session_state.shap_values
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
@@ -661,13 +679,13 @@ with tab2:
         top   = fi_df.head(15)
 
         CAT_COLORS = {
-            "Price History":     "#FFD700",
+            "Price History":      "#FFD700",
             "Trend & Volatility": "#60a5fa",
-            "Momentum":          "#f472b6",
-            "Intraday":          "#34d399",
-            "Calendar":          "#94a3b8",
-            "Macro":             "#a78bfa",
-            "Other":             "#64748b",
+            "Momentum":           "#f472b6",
+            "Intraday":           "#34d399",
+            "Calendar":           "#94a3b8",
+            "Macro":              "#a78bfa",
+            "Other":              "#64748b",
         }
         bar_colors = [CAT_COLORS.get(c, "#64748b") for c in top["Category"]]
 
@@ -675,8 +693,6 @@ with tab2:
             x=top["Importance"], y=top["Label"],
             orientation="h", marker_color=bar_colors,
         ))
-
-        # Legend annotations (color key)
         for i, (cat, col) in enumerate(CAT_COLORS.items()):
             if cat in top["Category"].values:
                 fig_fi.add_annotation(
@@ -685,10 +701,176 @@ with tab2:
                     text=f'<span style="color:{col}">■</span> {cat}',
                     font=dict(size=9, color=col),
                 )
-
-        fig_fi.update_layout(**gl("Top 15 Feature Importances", 490))
+        fig_fi.update_layout(**gl("Top 15 Feature Importances", 460))
         fig_fi.update_yaxes(autorange="reversed")
         st.plotly_chart(fig_fi, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHAP SECTION — full width below the two columns
+# ─────────────────────────────────────────────────────────────────────────────
+with tab2:
+    st.markdown("---")
+    st.markdown('<div class="s-hdr">🔍 SHAP Explainability</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="info-pill">
+      <strong>What is SHAP?</strong> Feature importance shows which inputs matter
+      globally across all predictions. SHAP goes further — it shows exactly how
+      much each feature pushed <em>today's specific prediction</em> up or down
+      from the model's baseline. Every bar below is a dollar amount contribution.<br><br>
+      <strong>How to read it:</strong>
+      🟢 Green bars pushed the prediction <strong>higher</strong> &nbsp;·&nbsp;
+      🔴 Red bars pushed it <strong>lower</strong> &nbsp;·&nbsp;
+      The baseline is the model's average prediction across all training data.
+    </div>""", unsafe_allow_html=True)
+
+    if not SHAP_AVAILABLE:
+        st.warning("SHAP not installed. Add `shap` to requirements.txt and redeploy.", icon="⚠️")
+
+    elif shap_values is None:
+        st.info("Train the model to generate SHAP explanations.", icon="💡")
+
+    else:
+        shap_col1, shap_col2 = st.columns([1, 1], gap="large")
+
+        # ── Waterfall chart — today's prediction breakdown ────────────────────
+        with shap_col1:
+            st.markdown('<div class="s-hdr">Today\'s Prediction — Feature Contributions</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                "Why did the model predict this specific price today? "
+                "Each bar shows one feature's dollar contribution."
+            )
+
+            last_row     = df_features[feature_names].iloc[-1:]
+            waterfall_df = get_waterfall_data(
+                shap_values, feature_names,
+                last_row.iloc[0], shap_expected, LABEL_MAP,
+            )
+
+            if not waterfall_df.empty:
+                final_pred = shap_expected + waterfall_df["shap_value"].sum()
+
+                w_colors = [
+                    "#4ade80" if v >= 0 else "#f87171"
+                    for v in waterfall_df["shap_value"]
+                ]
+
+                fig_w = go.Figure()
+
+                # Baseline marker
+                fig_w.add_trace(go.Scatter(
+                    x=[shap_expected] * len(waterfall_df),
+                    y=waterfall_df["label"],
+                    mode="markers",
+                    marker=dict(color="rgba(255,215,0,0.2)", size=6, symbol="line-ns"),
+                    name="Baseline",
+                    showlegend=False,
+                ))
+
+                # SHAP contribution bars
+                fig_w.add_trace(go.Bar(
+                    x=waterfall_df["shap_value"],
+                    y=waterfall_df["label"],
+                    orientation="h",
+                    marker_color=w_colors,
+                    marker_line_width=0,
+                    name="SHAP contribution",
+                    text=[f"{'+' if v >= 0 else ''}{v:.2f}" for v in waterfall_df["shap_value"]],
+                    textposition="outside",
+                    textfont=dict(size=10, color="#94a3b8"),
+                ))
+
+                fig_w.add_vline(x=0, line_color="rgba(255,255,255,0.2)", line_dash="dot")
+
+                layout_w = gl("", 440)
+                layout_w.update({
+                    "xaxis": {
+                        **layout_w.get("xaxis", {}),
+                        "title": "SHAP Value (USD contribution to prediction)",
+                        "tickprefix": "$",
+                    },
+                    "barmode": "relative",
+                    "showlegend": False,
+                })
+                fig_w.update_layout(**layout_w)
+                st.plotly_chart(fig_w, use_container_width=True)
+
+                # Baseline + total callout
+                bc1, bc2, bc3 = st.columns(3)
+                with bc1:
+                    st.markdown(card("Baseline Value",
+                                     f"${shap_expected:,.2f}",
+                                     "Model's avg prediction"), unsafe_allow_html=True)
+                with bc2:
+                    net = waterfall_df["shap_value"].sum()
+                    ns  = "+" if net >= 0 else ""
+                    st.markdown(card("Feature Adjustment",
+                                     f'<span class="{"up" if net >= 0 else "down"}">'
+                                     f'{ns}${net:.2f}</span>',
+                                     "Sum of all SHAP contributions"), unsafe_allow_html=True)
+                with bc3:
+                    st.markdown(card("Explained Prediction",
+                                     f"${final_pred:,.2f}",
+                                     "Baseline + adjustment"), unsafe_allow_html=True)
+
+        # ── Summary chart — average SHAP impact across all test predictions ───
+        with shap_col2:
+            st.markdown('<div class="s-hdr">Average SHAP Impact — Test Period</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                "Average contribution of each feature across all test predictions. "
+                "Green = tends to push predictions higher. Red = tends to push lower."
+            )
+
+            summary_df = get_summary_data(shap_values, feature_names, LABEL_MAP)
+
+            if not summary_df.empty:
+                s_colors = [
+                    "#4ade80" if v >= 0 else "#f87171"
+                    for v in summary_df["mean_shap"]
+                ]
+
+                fig_s = go.Figure(go.Bar(
+                    x=summary_df["mean_shap"],
+                    y=summary_df["label"],
+                    orientation="h",
+                    marker_color=s_colors,
+                    marker_line_width=0,
+                    text=[f"{'+' if v >= 0 else ''}{v:.2f}"
+                          for v in summary_df["mean_shap"]],
+                    textposition="outside",
+                    textfont=dict(size=10, color="#94a3b8"),
+                ))
+
+                fig_s.add_vline(x=0, line_color="rgba(255,255,255,0.2)", line_dash="dot")
+
+                layout_s = gl("", 440)
+                layout_s.update({
+                    "xaxis": {
+                        **layout_s.get("xaxis", {}),
+                        "title": "Mean SHAP Value (USD)",
+                        "tickprefix": "$",
+                    },
+                    "showlegend": False,
+                })
+                fig_s.update_layout(**layout_s)
+                st.plotly_chart(fig_s, use_container_width=True)
+
+                # Key insights callout
+                top_pos = summary_df[summary_df["mean_shap"] > 0].iloc[-1] \
+                          if len(summary_df[summary_df["mean_shap"] > 0]) > 0 else None
+                top_neg = summary_df[summary_df["mean_shap"] < 0].iloc[0] \
+                          if len(summary_df[summary_df["mean_shap"] < 0]) > 0 else None
+
+                if top_pos is not None or top_neg is not None:
+                    st.markdown("""
+                    <div class="info-pill" style="margin-top:12px;">
+                      <strong>💡 How to read this:</strong> Features with large positive
+                      values tend to push gold price predictions higher on average —
+                      e.g. a high VIX typically signals market fear which drives gold
+                      demand. Large negative values push predictions lower — e.g. a
+                      strong USD typically suppresses gold prices.
+                    </div>""", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

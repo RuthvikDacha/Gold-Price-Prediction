@@ -9,3 +9,4 @@ plotly>=5.18.0
 scipy>=1.12.0
 vaderSentiment>=3.3.2
 protobuf==3.20.3
+shap>=0.45.0
