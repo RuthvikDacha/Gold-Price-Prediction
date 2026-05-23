@@ -1,4 +1,4 @@
-# .github/workflows/retrain.yml
+.github/workflows/retrain.yml
 #
 # Scheduled daily retraining workflow for the Gold Price Predictor.
 #
