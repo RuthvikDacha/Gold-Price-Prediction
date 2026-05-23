@@ -1,11 +1,3 @@
-# requirements.txt
-# Streamlit Cloud reads this on every deployment and installs everything listed.
-# I'm letting most packages float to their latest compatible version —
-# the runtime.txt file locking Python to 3.11 is what prevents the MLflow
-# protobuf crash that occurs on Python 3.14.
-#
-# To install locally: pip install -r requirements.txt
-
 streamlit>=1.32.0
 yfinance>=0.2.40
 scikit-learn>=1.4.0
@@ -16,3 +8,4 @@ numpy>=1.26.0
 plotly>=5.18.0
 scipy>=1.12.0
 vaderSentiment>=3.3.2
+protobuf==3.20.3
