@@ -1,35 +1,8 @@
-# .github/workflows/retrain.yml
-#
-# Scheduled daily retraining workflow for the Gold Price Predictor.
-#
-# This runs automatically every weekday (Mon–Fri) at 6am UTC —
-# before US and European markets open, so the app always has a model
-# trained on yesterday's closing data by the time people check it.
-#
-# You can also trigger it manually at any time from the GitHub Actions tab
-# by clicking "Run workflow" — useful for forcing a retrain after a market event.
-#
-# What it does:
-#   1. Checks out the repo
-#   2. Sets up Python 3.11
-#   3. Installs all dependencies from requirements.txt
-#   4. Runs train.py which trains both RF and XGBoost and saves to models/
-#   5. Commits the new model files back to the repo
-#   6. Streamlit Cloud detects the new commit and auto-redeploys
-#
-# Required GitHub Secrets (set in repo Settings → Secrets → Actions):
-#   DAGSHUB_USERNAME  — your DagsHub username
-#   DAGSHUB_REPO      — your repo name (e.g. gold-price-predictor)
-#   DAGSHUB_TOKEN     — your DagsHub access token
-#
-# The GITHUB_TOKEN is provided automatically by GitHub — no setup needed.
-
 name: Daily Model Retraining
 
 on:
   schedule:
     # Runs at 6:00 AM UTC Mon–Fri
-    # Cron format: minute hour day month day-of-week
     - cron: "0 6 * * 1-5"
 
   # Allows manual trigger from the GitHub Actions tab
@@ -46,38 +19,35 @@ on:
         required: false
         default: "30"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   retrain:
     runs-on: ubuntu-latest
 
-    # Grant write permission so the workflow can commit model files back
     permissions:
       contents: write
 
     steps:
-      # ── Step 1: Checkout the repo ──────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Step 2: Set up Python 3.11 ─────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # ── Step 3: Install dependencies ───────────────────────────────────────
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── Step 4: Run training script ────────────────────────────────────────
       - name: Train models
         env:
-          # DagsHub MLflow credentials — set these in GitHub repo Secrets
           DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_REPO:     ${{ secrets.DAGSHUB_REPO }}
           DAGSHUB_TOKEN:    ${{ secrets.DAGSHUB_TOKEN }}
@@ -90,7 +60,6 @@ jobs:
             python train.py
           fi
 
-      # ── Step 5: Commit model files back to repo ────────────────────────────
       - name: Commit updated model files
         run: |
           git config --global user.name  "github-actions[bot]"
@@ -98,7 +67,6 @@ jobs:
 
           git add models/
 
-          # Only commit if something actually changed
           if git diff --staged --quiet; then
             echo "No model changes to commit."
           else
