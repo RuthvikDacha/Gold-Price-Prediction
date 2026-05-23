@@ -1,4 +1,4 @@
-# 🥇 Gold Price Predictor — v2
+# 🥇 Gold Price Predictor
 
 A machine learning web app that predicts the next day's gold price using
 **Random Forest** and **XGBoost**, enriched with macroeconomic features,
