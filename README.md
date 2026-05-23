@@ -1,9 +1,4 @@
-# 🥇 Gold Price Predictor
-
-![Gold Price Predictor](image.png)
-
-**[Live Demo](https://goldpp-rd.streamlit.app/)**
-
+# 🥇 Gold Price Predictor — v2
 
 A machine learning web app that predicts the next day's gold price using
 **Random Forest** and **XGBoost**, enriched with macroeconomic features,
@@ -28,10 +23,10 @@ moving averages and lookback periods up to the full 25-year history. Also shows
 five real-time macro indicators and a news sentiment panel powered by VADER.
 
 **🤖 Price Prediction** — Predicts tomorrow's gold closing price with a 95% confidence
-interval. The user picks Random Forest or XGBoost in the sidebar. A gauge chart
-shows where the prediction sits relative to the current price and the confidence bounds.
-Below the prediction, two SHAP charts explain exactly why the model made that call —
-which features pushed the price up and which pushed it down, in dollar terms.
+interval. Includes a multi-step recursive forecast (3, 5, or 7 trading days ahead) with
+a widening confidence band chart and a full forecast table. Two SHAP charts explain
+exactly why the model made each prediction — which features pushed the price up and
+which pushed it down, in dollar terms.
 
 **📈 Model Performance** — RMSE, MAE, R², and MAPE metrics. Actual vs predicted price
 chart, error over time, error distribution histogram, and an actual vs predicted scatter
@@ -50,6 +45,7 @@ history table with an RMSE trend chart to track model quality over time.
 | Gold price data | `yfinance` — GC=F (gold futures) |
 | Macro indicators | `yfinance` — DXY, TNX, CL=F, GSPC, VIX |
 | ML models | `scikit-learn` (Random Forest) + `XGBoost` |
+| Hyperparameter tuning | `optuna` — automated TPE search for RF and XGBoost |
 | Drift monitoring | `scipy.stats` — PSI + KS test (custom implementation) |
 | Explainability | `shap` — SHAP waterfall + summary charts |
 | Experiment tracking | `MLflow` — local or DagsHub remote |
@@ -261,10 +257,14 @@ affect what the model outputs.
 
 ---
 
-## Ideas for future
+## Ideas for v3
 
 - GitHub Actions scheduled workflow for automatic daily retraining
 - Pre-trained model artifacts committed to the repo so the app loads instantly
-- Hyperparameter tuning with Optuna or GridSearchCV
-- Add more macro features (CPI releases, Fed meeting dates as binary flags)
-- Multi-step forecasting (predict 5 or 7 days ahead instead of just 1)
+- Hyperparameter tuning with Optuna
+
+---
+
+## License
+
+MIT — free to use, modify, and build on.

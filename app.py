@@ -13,8 +13,11 @@ import os
 
 from data        import fetch_gold_data, fetch_macro_data, merge_with_macro, \
                         engineer_features, prepare_data, get_feature_columns
-from model       import train_model, evaluate_model, get_feature_importance, predict_next_day
+from model       import train_model, evaluate_model, get_feature_importance, \
+                        predict_next_day, predict_multi_step, \
+                        save_model, load_model, list_saved_models
 from mlflow_utils import log_training_run, get_run_history, get_best_run, setup_mlflow
+from tuning      import run_tuning
 from monitoring  import run_full_monitoring, psi_status
 from sentiment   import get_gold_news_sentiment
 from shap_utils  import (get_explainer, compute_shap_values, get_waterfall_data,
@@ -175,6 +178,7 @@ _defaults = dict(
     monitoring_results=None, last_trained=None,
     mlflow_backend="local",
     shap_explainer=None, shap_expected=None, shap_values=None,
+    forecast_df=None,
 )
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -233,12 +237,29 @@ with st.sidebar:
       <span style='color:#FFD700;font-size:17px;font-weight:800;letter-spacing:.5px;'>
         Gold Predictor
       </span><br>
-      <span style='color:#475569;font-size:11px;'>v2.0 — ML + Monitoring</span>
+      <span style='color:#475569;font-size:11px;'>v3.0 — ML + Monitoring + AutoRetrain</span>
     </div>
     """, unsafe_allow_html=True)
     st.markdown("---")
 
-    st.markdown("#### ⚙️ Model Settings")
+    # ── Pre-trained model status ──────────────────────────────────────────────
+    saved = list_saved_models()
+    any_saved = any(saved.values())
+
+    if any_saved:
+        st.markdown("#### 🤖 Pre-trained Models Available")
+        for mt, exists in saved.items():
+            icon = "✅" if exists else "❌"
+            st.caption(f"{icon} {mt}")
+        load_btn = st.button("⚡  Load Pre-trained Model", use_container_width=True,
+                             help="Loads the model saved by the last GitHub Actions run. "
+                                  "Instant — no training required.")
+    else:
+        load_btn = False
+        st.info("No pre-trained models found.\nTrain manually below.", icon="ℹ️")
+
+    st.markdown("---")
+    st.markdown("#### ⚙️ Manual Training Settings")
 
     model_choice = st.selectbox(
         "ML Algorithm",
@@ -259,13 +280,24 @@ with st.sidebar:
         help="Fraction of data reserved for evaluation. Never used in training.",
     )
 
-    st.markdown("#### 🔬 Feature Options")
+    st.markdown("#### 🔬 Feature & Tuning Options")
 
     include_macro = st.toggle(
-        "Include Macro Features",
-        value=True,
+        "Include Macro Features", value=True,
         help="Adds USD index, Treasury yields, oil price, S&P 500, and VIX as features.",
     )
+
+    use_tuning = st.toggle(
+        "Optuna Hyperparameter Tuning", value=False,
+        help="Runs an automated search for the best model parameters before training. "
+             "Adds 2–5 minutes but usually improves RMSE.",
+    )
+
+    if use_tuning:
+        n_trials = st.slider("Optuna Trials", 10, 100, 30, 10,
+                             help="More trials = better params but longer wait.")
+    else:
+        n_trials = 30
 
     st.markdown("---")
     train_btn = st.button("🚀  Train Model", use_container_width=True)
@@ -278,6 +310,8 @@ with st.sidebar:
             st.caption(f"RMSE **${m['rmse']:.2f}** · R² **{m['r2']:.4f}**")
         if st.session_state.last_trained:
             st.caption(f"Trained: {st.session_state.last_trained}")
+        if st.session_state.get("load_source") == "pretrained":
+            st.info("⚡ Loaded from pre-trained file", icon="⚡")
         if st.session_state.mlflow_backend == "dagshub":
             st.info("📡 Logging to DagsHub", icon="📡")
         else:
@@ -285,10 +319,74 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("Data: Yahoo Finance · GC=F")
-    st.caption("Stack: scikit-learn · XGBoost\nMLflow · scipy · VADER")
+    st.caption("Stack: scikit-learn · XGBoost\nMLflow · Optuna · scipy · VADER")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TRAINING PIPELINE
+# LOAD PRE-TRAINED MODEL PIPELINE
+# ══════════════════════════════════════════════════════════════════════════════
+if load_btn:
+    bar = st.progress(0, "Loading pre-trained model…")
+    loaded_model, loaded_metrics, loaded_features, loaded_meta = \
+        load_model(model_choice)
+
+    if loaded_model is None:
+        st.error(f"No pre-trained {model_choice} found in models/ folder.")
+    else:
+        bar.progress(30, "Fetching latest gold data for predictions…")
+        df_raw = fetch_gold_data("max")
+        st.session_state.df_raw = df_raw
+
+        bar.progress(55, "Fetching macro data…")
+        macro_df  = fetch_macro_data("max")
+        df_merged = merge_with_macro(df_raw, macro_df)
+
+        bar.progress(70, "Engineering features…")
+        df_features = engineer_features(df_merged, include_macro=True)
+        st.session_state.df_features = df_features
+
+        # Rebuild X_test from the last 20% of data for monitoring + performance tab
+        X_train, X_test, y_train, y_test, test_df, _ = \
+            prepare_data(df_features, 0.20, True)
+
+        predictions  = loaded_model.predict(X_test)
+        train_preds  = loaded_model.predict(X_train)
+        loaded_metrics["predictions"] = predictions
+
+        bar.progress(90, "Computing SHAP values…")
+        if SHAP_AVAILABLE:
+            explainer, expected_val = get_explainer(loaded_model, X_train, model_choice)
+            shap_vals = compute_shap_values(explainer, X_test)
+        else:
+            explainer, expected_val, shap_vals = None, None, None
+
+        st.session_state.update(dict(
+            trained=True,
+            model=loaded_model,
+            model_type=loaded_meta["model_type"],
+            params={},
+            metrics=loaded_metrics,
+            X_train=X_train, X_test=X_test,
+            y_train=y_train, y_test=y_test,
+            test_df=test_df,
+            predictions=predictions,
+            train_preds=train_preds,
+            feature_names=loaded_features,
+            shap_explainer=explainer,
+            shap_expected=expected_val,
+            shap_values=shap_vals,
+            monitoring_results=None,
+            forecast_df=None,
+            last_trained=loaded_meta.get("trained_at", "Unknown"),
+            mlflow_backend="local",
+            load_source="pretrained",
+        ))
+
+        bar.progress(100, "Done!")
+        st.toast(f"⚡ {loaded_meta['model_type']} loaded successfully!", icon="⚡")
+        st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MANUAL TRAINING PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 if train_btn:
     bar = st.progress(0, "Fetching gold price data…")
@@ -306,11 +404,27 @@ if train_btn:
     df_features = engineer_features(df_merged, include_macro=include_macro)
     st.session_state.df_features = df_features
 
-    bar.progress(50, f"Training {model_choice}…")
+    bar.progress(50, f"Running Optuna ({n_trials} trials)…" if use_tuning
+                 else f"Training {model_choice}…")
     X_train, X_test, y_train, y_test, test_df, feature_names = \
         prepare_data(df_features, test_size_choice, include_macro)
 
-    model, params = train_model(X_train, y_train, model_choice)
+    if use_tuning:
+        tuned_params, best_val_rmse = run_tuning(model_choice, X_train, y_train, n_trials)
+        tuned_params["random_state"] = 42
+        if model_choice == "Random Forest":
+            from sklearn.ensemble import RandomForestRegressor as RFR
+            tuned_params["n_jobs"] = -1
+            model = RFR(**tuned_params)
+        else:
+            from xgboost import XGBRegressor as XGBR
+            tuned_params["verbosity"] = 0
+            model = XGBR(**tuned_params)
+        model.fit(X_train, y_train)
+        params = tuned_params
+        st.toast(f"✅ Optuna best val RMSE: ${best_val_rmse:.2f}", icon="🎯")
+    else:
+        model, params = train_model(X_train, y_train, model_choice)
 
     st.session_state.update(dict(
         X_train=X_train, X_test=X_test,
@@ -327,13 +441,15 @@ if train_btn:
     st.session_state.predictions  = metrics["predictions"]
     st.session_state.train_preds  = train_preds
 
-    bar.progress(88, "Logging to MLflow…")
+    bar.progress(88, "Logging to MLflow & saving model…")
     fi_df   = get_feature_importance(model, feature_names)
     backend = setup_mlflow()
     run_id  = log_training_run(model, model_choice, params, metrics, fi_df,
                                include_macro, period_choice)
+    save_model(model, model_choice, metrics, feature_names, params)
     st.session_state.run_id          = run_id
     st.session_state.mlflow_backend  = backend
+    st.session_state.load_source     = "manual"
 
     bar.progress(94, "Computing SHAP values…")
     if SHAP_AVAILABLE:
@@ -407,6 +523,7 @@ feature_names = st.session_state.feature_names
 shap_explainer = st.session_state.shap_explainer
 shap_expected  = st.session_state.shap_expected
 shap_values    = st.session_state.shap_values
+forecast_df    = st.session_state.forecast_df
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
@@ -704,6 +821,168 @@ with tab2:
         fig_fi.update_layout(**gl("Top 15 Feature Importances", 460))
         fig_fi.update_yaxes(autorange="reversed")
         st.plotly_chart(fig_fi, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MULTI-STEP FORECAST — full width below the two columns
+# ─────────────────────────────────────────────────────────────────────────────
+with tab2:
+    st.markdown("---")
+    st.markdown('<div class="s-hdr">📅 Multi-Step Forecast</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="info-pill">
+      <strong>How this works:</strong> I use recursive forecasting — the model predicts
+      Day 1, then that prediction gets fed back as input to predict Day 2, and so on.
+      This is honest about how uncertainty grows: the confidence band deliberately widens
+      each day using a √step multiplier, which is the standard statistical approach for
+      sequential forecast uncertainty. By Day 7 the band is wider than Day 1 — that's
+      intentional and correct, not a bug.
+    </div>""", unsafe_allow_html=True)
+
+    fc1, fc2 = st.columns([3, 1], gap="large")
+    with fc2:
+        horizon = st.select_slider(
+            "Forecast Horizon",
+            options=[3, 5, 7],
+            value=7,
+            help="How many trading days ahead to forecast.",
+        )
+        run_forecast = st.button("📅  Run Forecast", use_container_width=True)
+
+    if run_forecast:
+        with st.spinner(f"Running {horizon}-day recursive forecast…"):
+            fdf = predict_multi_step(
+                model, df_features, feature_names,
+                model_type, metrics["rmse"], horizon,
+            )
+            st.session_state.forecast_df = fdf
+            forecast_df = fdf
+        st.toast(f"✅ {horizon}-day forecast complete!", icon="📅")
+
+    if forecast_df is not None and not forecast_df.empty:
+        # ── Forecast chart ────────────────────────────────────────────────────
+        last_n   = 30
+        hist_df  = df_raw.tail(last_n)
+
+        fig_fc = go.Figure()
+
+        # Historical price line
+        fig_fc.add_trace(go.Scatter(
+            x=list(hist_df.index),
+            y=hist_df["Close"].tolist(),
+            name="Historical Price",
+            line=dict(color="#FFD700", width=2),
+        ))
+
+        # Bridge point — connects history to forecast cleanly
+        bridge_x = [hist_df.index[-1], hist_df.index[-1]]
+        bridge_y = [float(hist_df["Close"].iloc[-1]),
+                    float(forecast_df["predicted"].iloc[0])]
+
+        # Forecast dates (use strings since they're formatted)
+        fc_dates = [f"Day +{r['day']} ({r['date']})" for _, r in forecast_df.iterrows()]
+
+        # Confidence band
+        fig_fc.add_trace(go.Scatter(
+            x=fc_dates + fc_dates[::-1],
+            y=forecast_df["upper"].tolist() + forecast_df["lower"].tolist()[::-1],
+            fill="toself",
+            fillcolor="rgba(255,215,0,0.08)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="95% Confidence Band",
+            hoverinfo="skip",
+        ))
+
+        # Upper bound line
+        fig_fc.add_trace(go.Scatter(
+            x=fc_dates,
+            y=forecast_df["upper"].tolist(),
+            line=dict(color="rgba(255,215,0,0.25)", width=1, dash="dot"),
+            name="Upper Bound",
+            showlegend=False,
+        ))
+
+        # Lower bound line
+        fig_fc.add_trace(go.Scatter(
+            x=fc_dates,
+            y=forecast_df["lower"].tolist(),
+            line=dict(color="rgba(255,215,0,0.25)", width=1, dash="dot"),
+            name="Lower Bound",
+            showlegend=False,
+        ))
+
+        # Forecast price line
+        fig_fc.add_trace(go.Scatter(
+            x=fc_dates,
+            y=forecast_df["predicted"].tolist(),
+            name="Forecast",
+            line=dict(color="#a78bfa", width=2.5, dash="dash"),
+            mode="lines+markers",
+            marker=dict(color="#a78bfa", size=7, symbol="circle"),
+        ))
+
+        layout_fc = gl(f"{horizon}-Day Gold Price Forecast  (USD / troy oz)", 440)
+        layout_fc.update({"xaxis": {"tickangle": -30}})
+        fig_fc.update_layout(**layout_fc)
+        st.plotly_chart(fig_fc, use_container_width=True)
+
+        # ── Forecast table ────────────────────────────────────────────────────
+        st.markdown('<div class="s-hdr">Forecast Table</div>', unsafe_allow_html=True)
+
+        display_df = forecast_df.copy()
+        display_df["Predicted"]  = display_df["predicted"].apply(lambda x: f"${x:,.2f}")
+        display_df["Low"]        = display_df["lower"].apply(lambda x: f"${x:,.2f}")
+        display_df["High"]       = display_df["upper"].apply(lambda x: f"${x:,.2f}")
+        display_df["Change ($)"] = display_df["change_usd"].apply(
+            lambda x: f"+${x:,.2f}" if x >= 0 else f"-${abs(x):,.2f}"
+        )
+        display_df["Change (%)"] = display_df["change_pct"].apply(
+            lambda x: f"+{x:.2f}%" if x >= 0 else f"{x:.2f}%"
+        )
+        display_df["Day"]  = display_df["day"].apply(lambda x: f"+{x}")
+        display_df["Date"] = display_df["date"]
+
+        st.dataframe(
+            display_df[["Day", "Date", "Predicted", "Low", "High", "Change ($)", "Change (%)"]],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        # ── Summary metric cards ──────────────────────────────────────────────
+        last_fc   = forecast_df.iloc[-1]
+        best_day  = forecast_df.loc[forecast_df["predicted"].idxmax()]
+        worst_day = forecast_df.loc[forecast_df["predicted"].idxmin()]
+        avg_pred  = forecast_df["predicted"].mean()
+
+        fc_s1, fc_s2, fc_s3, fc_s4 = st.columns(4)
+        with fc_s1:
+            end_chg = last_fc["change_pct"]
+            end_cls = "up" if end_chg >= 0 else "down"
+            st.markdown(card(
+                f"Day +{int(last_fc['day'])} Forecast",
+                f"${last_fc['predicted']:,.2f}",
+                f'<span class="{end_cls}">{"+" if end_chg >= 0 else ""}{end_chg:.2f}% from today</span>',
+            ), unsafe_allow_html=True)
+        with fc_s2:
+            st.markdown(card(
+                f"Period Average",
+                f"${avg_pred:,.2f}",
+                f"Across {horizon} trading days",
+            ), unsafe_allow_html=True)
+        with fc_s3:
+            st.markdown(card(
+                "Forecast High",
+                f"${best_day['predicted']:,.2f}",
+                f"Day +{int(best_day['day'])} ({best_day['date']})",
+            ), unsafe_allow_html=True)
+        with fc_s4:
+            st.markdown(card(
+                "Forecast Low",
+                f"${worst_day['predicted']:,.2f}",
+                f"Day +{int(worst_day['day'])} ({worst_day['date']})",
+            ), unsafe_allow_html=True)
+
+    else:
+        st.info("Set your horizon above and click 'Run Forecast' to generate the forecast.", icon="📅")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SHAP SECTION — full width below the two columns
