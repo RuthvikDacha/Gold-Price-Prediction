@@ -1,11 +1,11 @@
 name: Daily Model Retraining
 
 on:
-  schedule:
-    # Runs at 6:00 AM UTC Mon–Fri
-    - cron: "0 6 * * 1-5"
+  # Schedule removed — trigger manually from the Actions tab when needed
+  # To re-enable daily retraining uncomment the lines below:
+  # schedule:
+  #   - cron: "0 6 * * 1-5"
 
-  # Allows manual trigger from the GitHub Actions tab
   workflow_dispatch:
     inputs:
       run_tuning:
@@ -17,7 +17,7 @@ on:
       n_trials:
         description: "Number of Optuna trials (if tuning enabled)"
         required: false
-        default: "30"
+        default: "20"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
