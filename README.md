@@ -261,16 +261,10 @@ affect what the model outputs.
 
 ---
 
-## Ideas for v3
+## Ideas for future
 
 - GitHub Actions scheduled workflow for automatic daily retraining
 - Pre-trained model artifacts committed to the repo so the app loads instantly
 - Hyperparameter tuning with Optuna or GridSearchCV
 - Add more macro features (CPI releases, Fed meeting dates as binary flags)
 - Multi-step forecasting (predict 5 or 7 days ahead instead of just 1)
-
----
-
-## License
-
-MIT — free to use, modify, and build on.
