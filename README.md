@@ -1,3 +1,8 @@
+<img width="1917" height="857" alt="image" src="https://github.com/user-attachments/assets/4f5949ee-cc7e-4442-beea-5576f68d77ed" />
+
+
+
+
 # 🥇 Gold Price Predictor
 
 A machine learning web app that predicts the next day's gold price using
