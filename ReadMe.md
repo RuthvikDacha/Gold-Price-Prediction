@@ -1,5 +1,10 @@
 # 🥇 Gold Price Predictor
 
+![Gold Price Predictor](image.png)
+
+ **[Live Demo](https://gold-price-prediction-rd.streamlit.app/)**
+
+
 A machine learning web app that predicts gold prices using **Random Forest** and **XGBoost**, enriched with macroeconomic features, multi-step forecasting, SHAP explainability, Optuna hyperparameter tuning, PSI drift monitoring, and MLflow experiment tracking via DagsHub.
 
 Live on **Streamlit Community Cloud** — free, public, always on.
