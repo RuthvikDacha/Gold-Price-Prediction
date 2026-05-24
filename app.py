@@ -16,7 +16,7 @@ from data        import fetch_gold_data, fetch_macro_data, merge_with_macro, \
 from model       import train_model, evaluate_model, get_feature_importance, \
                         predict_next_day, predict_multi_step
 from mlflow_utils import log_training_run, get_run_history, get_best_run, setup_mlflow
-from tuning      import run_tuning
+from tuning      import run_tuning, get_trial_history
 from monitoring  import run_full_monitoring, psi_status
 from sentiment   import get_gold_news_sentiment
 from shap_utils  import (get_explainer, compute_shap_values, get_waterfall_data,
@@ -179,6 +179,7 @@ _defaults = dict(
     shap_explainer=None, shap_expected=None, shap_values=None,
     forecast_df=None,
     run_name=None, run_label="",
+    optuna_study=None, optuna_model_type=None,
 )
 for _k, _v in _defaults.items():
     if _k not in st.session_state:
@@ -284,7 +285,7 @@ with st.sidebar:
 
     st.markdown("#### 🏷️ MLflow Run Label")
     run_label = st.text_input(
-        "MLflow Run Label",
+        "MLflow Run Label  *(required)*",
         value="",
         placeholder="e.g. TestRun-1 or XGB-Macro-Test",
         help="Give this training run a label so you can find it in the MLflow / DagsHub UI. "
@@ -293,9 +294,16 @@ with st.sidebar:
     st.caption("💡 This exact label will appear as the run name in DagsHub — "
                "useful when multiple people use the app.")
 
+    if run_label.strip() == "":
+        st.warning("Please enter a run label before training.", icon="⚠️")
+
     st.markdown("---")
-    train_btn = st.button("🚀  Train Model", use_container_width=True)
-    load_btn  = False  # pre-trained mode removed
+    train_btn = st.button(
+        "🚀  Train Model",
+        use_container_width=True,
+        disabled=(run_label.strip() == ""),
+    )
+    load_btn = False
 
     if st.session_state.trained:
         st.markdown("---")
@@ -342,7 +350,9 @@ if train_btn:
         prepare_data(df_features, test_size_choice, include_macro)
 
     if use_tuning:
-        tuned_params, best_val_rmse = run_tuning(model_choice, X_train, y_train, n_trials)
+        tuned_params, best_val_rmse, optuna_study = run_tuning(
+            model_choice, X_train, y_train, n_trials
+        )
         tuned_params["random_state"] = 42
         if model_choice == "Random Forest":
             from sklearn.ensemble import RandomForestRegressor as RFR
@@ -354,9 +364,13 @@ if train_btn:
             model = XGBR(**tuned_params)
         model.fit(X_train, y_train)
         params = tuned_params
+        st.session_state.optuna_study      = optuna_study
+        st.session_state.optuna_model_type = model_choice
         st.toast(f"✅ Optuna best val RMSE: ${best_val_rmse:.2f}", icon="🎯")
     else:
         model, params = train_model(X_train, y_train, model_choice)
+        st.session_state.optuna_study      = None
+        st.session_state.optuna_model_type = None
 
     st.session_state.update(dict(
         X_train=X_train, X_test=X_test,
@@ -465,15 +479,18 @@ shap_explainer = st.session_state.shap_explainer
 shap_expected  = st.session_state.shap_expected
 shap_values    = st.session_state.shap_values
 forecast_df    = st.session_state.forecast_df
+optuna_study   = st.session_state.optuna_study
+optuna_mtype   = st.session_state.optuna_model_type
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊  Dashboard",
     "🤖  Prediction",
     "📈  Performance",
     "🔍  Monitoring",
+    "🎯  Optuna",
 ])
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1308,3 +1325,188 @@ mlflow ui
 ```
 Open **http://localhost:5000** to browse all runs.
             """)
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 5 — OPTUNA TRIAL HISTORY
+# ─────────────────────────────────────────────────────────────────────────────
+with tab5:
+    st.markdown('<div class="s-hdr">🎯 Optuna Hyperparameter Tuning Dashboard</div>',
+                unsafe_allow_html=True)
+    st.markdown("""
+    <div class="info-pill">
+      <strong>What is Optuna?</strong> Instead of guessing hyperparameters manually,
+      Optuna runs a directed search across the parameter space. Each trial tries a
+      different combination of settings and records the validation RMSE. The TPE sampler
+      learns from each result and focuses subsequent trials on promising regions —
+      much smarter than a grid search.<br><br>
+      Enable <strong>Optuna Hyperparameter Tuning</strong> in the sidebar before training
+      to populate this dashboard.
+    </div>""", unsafe_allow_html=True)
+
+    if optuna_study is None:
+        st.info(
+            "No Optuna study found. Enable 'Optuna Hyperparameter Tuning' in the "
+            "sidebar and train the model to see the trial history here.",
+            icon="💡",
+        )
+    else:
+        trials_df, params_df = get_trial_history(optuna_study)
+
+        if trials_df.empty:
+            st.warning("Trial history is empty — something may have gone wrong during tuning.")
+        else:
+            best_rmse   = optuna_study.best_value
+            best_trial  = optuna_study.best_trial.number + 1
+            n_trials_run = len(trials_df)
+            worst_rmse  = float(trials_df["RMSE"].max())
+            improvement = round(((worst_rmse - best_rmse) / worst_rmse) * 100, 1)
+
+            # ── Summary cards ─────────────────────────────────────────────────
+            oc1, oc2, oc3, oc4 = st.columns(4)
+            with oc1:
+                st.markdown(card("Total Trials Run",
+                                 str(n_trials_run),
+                                 f"Model: {optuna_mtype}"),
+                            unsafe_allow_html=True)
+            with oc2:
+                st.markdown(card("Best Validation RMSE",
+                                 f"${best_rmse:.2f}",
+                                 f"Found at trial {best_trial}"),
+                            unsafe_allow_html=True)
+            with oc3:
+                st.markdown(card("First Trial RMSE",
+                                 f"${worst_rmse:.2f}",
+                                 "Before tuning"),
+                            unsafe_allow_html=True)
+            with oc4:
+                st.markdown(card("RMSE Improvement",
+                                 f"{improvement}%",
+                                 "vs first trial"),
+                            unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── Convergence chart ─────────────────────────────────────────────
+            st.markdown('<div class="s-hdr">RMSE Convergence — All Trials</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                "Each point is one trial. The green line tracks the best RMSE found so far "
+                "— a steadily falling line means Optuna is converging on a good solution."
+            )
+
+            # Running best (minimum so far at each trial)
+            trials_df["Best So Far"] = trials_df["RMSE"].cummin()
+
+            is_best = trials_df["Is Best"]
+
+            fig_conv = go.Figure()
+
+            # All trial dots
+            fig_conv.add_trace(go.Scatter(
+                x=trials_df["Trial"],
+                y=trials_df["RMSE"],
+                mode="markers",
+                name="Trial RMSE",
+                marker=dict(
+                    color=[
+                        "#FFD700" if b else "#334155"
+                        for b in is_best
+                    ],
+                    size=[12 if b else 7 for b in is_best],
+                    line=dict(color="#FFD700", width=[2 if b else 0 for b in is_best]),
+                ),
+                hovertemplate="Trial %{x}<br>RMSE: $%{y:.2f}<extra></extra>",
+            ))
+
+            # Running best line
+            fig_conv.add_trace(go.Scatter(
+                x=trials_df["Trial"],
+                y=trials_df["Best So Far"],
+                mode="lines",
+                name="Best So Far",
+                line=dict(color="#4ade80", width=2, dash="dot"),
+            ))
+
+            # Mark the best trial
+            best_row = trials_df[trials_df["Is Best"]].iloc[-1]
+            fig_conv.add_annotation(
+                x=best_row["Trial"], y=best_row["RMSE"],
+                text=f"  Best: ${best_row['RMSE']:.2f}",
+                showarrow=True, arrowhead=2,
+                arrowcolor="#4ade80", font=dict(color="#4ade80", size=11),
+                ax=30, ay=-30,
+            )
+
+            layout_conv = gl("", 380)
+            layout_conv.update({
+                "xaxis": {**layout_conv.get("xaxis", {}),
+                          "title": "Trial Number", "dtick": 1},
+                "yaxis": {**layout_conv.get("yaxis", {}),
+                          "title": "Validation RMSE ($)", "tickprefix": "$"},
+            })
+            fig_conv.update_layout(**layout_conv)
+            st.plotly_chart(fig_conv, use_container_width=True)
+
+            # ── Best hyperparameters ──────────────────────────────────────────
+            st.markdown('<div class="s-hdr">Best Hyperparameters Found</div>',
+                        unsafe_allow_html=True)
+            st.caption(f"Parameters from trial {best_trial} — used to train the final model.")
+
+            best_params = optuna_study.best_params
+            bp_cols     = st.columns(min(len(best_params), 4))
+            for i, (param, val) in enumerate(best_params.items()):
+                with bp_cols[i % len(bp_cols)]:
+                    display_val = f"{val:.4f}" if isinstance(val, float) else str(val)
+                    st.markdown(
+                        card(param.replace("_", " ").title(), display_val),
+                        unsafe_allow_html=True,
+                    )
+
+            # ── Full trial history table ──────────────────────────────────────
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown('<div class="s-hdr">Full Trial History</div>',
+                        unsafe_allow_html=True)
+            st.caption("Every trial Optuna ran, sorted by trial number. "
+                       "🥇 marks the best trial.")
+
+            display_params = params_df.copy()
+            display_params.insert(
+                2, "🥇",
+                display_params["Trial"].apply(
+                    lambda t: "🥇" if t == best_trial else ""
+                )
+            )
+            st.dataframe(
+                display_params,
+                hide_index=True,
+                use_container_width=True,
+                height=320,
+            )
+
+            # ── RMSE distribution ─────────────────────────────────────────────
+            st.markdown('<div class="s-hdr">RMSE Distribution Across Trials</div>',
+                        unsafe_allow_html=True)
+            st.caption("Shows how spread out the trial results were. "
+                       "A tight cluster near the left means most configurations performed well.")
+
+            fig_dist = go.Figure(go.Histogram(
+                x=trials_df["RMSE"],
+                nbinsx=max(5, n_trials_run // 3),
+                marker_color="#FFD700",
+                opacity=0.75,
+            ))
+            fig_dist.add_vline(
+                x=best_rmse, line_dash="dash", line_color="#4ade80",
+                annotation_text=f"Best ${best_rmse:.2f}",
+                annotation_font_color="#4ade80",
+            )
+            layout_dist = gl("", 280)
+            layout_dist.update({
+                "xaxis": {**layout_dist.get("xaxis", {}),
+                          "title": "Validation RMSE ($)", "tickprefix": "$"},
+                "yaxis": {**layout_dist.get("yaxis", {}), "title": "Count"},
+            })
+            fig_dist.update_layout(**layout_dist)
+            st.plotly_chart(fig_dist, use_container_width=True)
