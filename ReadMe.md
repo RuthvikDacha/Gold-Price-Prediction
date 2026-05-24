@@ -277,9 +277,3 @@ dagshub_token    = "your-token-here"
 - Hyperparameter comparison across runs — visualise how params changed between sessions
 - Additional macro features — CPI release dates, Fed meeting dates as binary flags
 - Scheduled auto-retraining — re-enable the GitHub Actions cron trigger when needed
-
----
-
-## License
-
-MIT — free to use, modify, and build on.
