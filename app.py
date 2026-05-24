@@ -260,7 +260,7 @@ with st.sidebar:
     )
 
     test_size_choice = st.slider(
-        "Test Set Size", 0.10, 0.30, 0.20, 0.05,
+        "Test Set Size", 0.10, 0.30, 0.10, 0.05,
         help="Fraction of data reserved for evaluation only.",
     )
 
@@ -278,7 +278,7 @@ with st.sidebar:
     )
 
     if use_tuning:
-        n_trials = st.slider("Optuna Trials", 10, 50, 20, 10,
+        n_trials = st.slider("Optuna Trials", 10, 50, 10, 10,
                              help="More trials = better params but longer wait.")
     else:
         n_trials = 20
@@ -1357,13 +1357,42 @@ with tab5:
         if trials_df.empty:
             st.warning("Trial history is empty — something may have gone wrong during tuning.")
         else:
-            best_rmse   = optuna_study.best_value
-            best_trial  = optuna_study.best_trial.number + 1
+            best_rmse    = optuna_study.best_value
+            best_trial   = optuna_study.best_trial.number + 1
             n_trials_run = len(trials_df)
-            worst_rmse  = float(trials_df["RMSE"].max())
-            improvement = round(((worst_rmse - best_rmse) / worst_rmse) * 100, 1)
+            worst_rmse   = float(trials_df["RMSE"].max())
+            improvement  = round(((worst_rmse - best_rmse) / worst_rmse) * 100, 1)
 
-            # ── Summary cards ─────────────────────────────────────────────────
+            # Top 3 trials sorted by RMSE ascending
+            top3 = trials_df.nsmallest(3, "RMSE").reset_index(drop=True)
+            medals = ["🥇", "🥈", "🥉"]
+            medal_trial_map = {
+                int(top3.iloc[i]["Trial"]): medals[i]
+                for i in range(len(top3))
+            }
+
+            # ── Summary cards — top 3 podium ──────────────────────────────────
+            st.markdown('<div class="s-hdr">🏆 Podium — Top 3 Trials</div>',
+                        unsafe_allow_html=True)
+
+            podium_cols = st.columns(3)
+            podium_colors = ["#FFD700", "#94a3b8", "#cd7f32"]
+            for i in range(min(3, len(top3))):
+                row = top3.iloc[i]
+                with podium_cols[i]:
+                    st.markdown(
+                        f'<div class="g-card" style="border-color:{podium_colors[i]};">'
+                        f'<div class="gc-label">{medals[i]} Rank {i+1}</div>'
+                        f'<div class="gc-value" style="color:{podium_colors[i]};">'
+                        f'${row["RMSE"]:.2f}</div>'
+                        f'<div class="gc-sub">Trial {int(row["Trial"])}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Summary stat cards
             oc1, oc2, oc3, oc4 = st.columns(4)
             with oc1:
                 st.markdown(card("Total Trials Run",
@@ -1373,7 +1402,7 @@ with tab5:
             with oc2:
                 st.markdown(card("Best Validation RMSE",
                                  f"${best_rmse:.2f}",
-                                 f"Found at trial {best_trial}"),
+                                 f"🥇 Trial {best_trial}"),
                             unsafe_allow_html=True)
             with oc3:
                 st.markdown(card("First Trial RMSE",
@@ -1392,35 +1421,57 @@ with tab5:
             st.markdown('<div class="s-hdr">RMSE Convergence — All Trials</div>',
                         unsafe_allow_html=True)
             st.caption(
-                "Each point is one trial. The green line tracks the best RMSE found so far "
-                "— a steadily falling line means Optuna is converging on a good solution."
+                "Each point is one trial. 🥇🥈🥉 mark the top 3 results. "
+                "The green line tracks the best RMSE found so far."
             )
 
-            # Running best (minimum so far at each trial)
             trials_df["Best So Far"] = trials_df["RMSE"].cummin()
 
-            is_best = trials_df["Is Best"]
+            # Assign colour and size per trial based on rank
+            top3_trials = set(medal_trial_map.keys())
+            dot_colors = []
+            dot_sizes  = []
+            dot_borders = []
+            for _, row in trials_df.iterrows():
+                t = int(row["Trial"])
+                if t == best_trial:
+                    dot_colors.append("#FFD700")
+                    dot_sizes.append(14)
+                    dot_borders.append(2)
+                elif t in top3_trials:
+                    dot_colors.append("#94a3b8")
+                    dot_sizes.append(11)
+                    dot_borders.append(2)
+                else:
+                    dot_colors.append("#334155")
+                    dot_sizes.append(7)
+                    dot_borders.append(0)
+
+            # Hover text with medal if in top 3
+            hover_texts = []
+            for _, row in trials_df.iterrows():
+                t = int(row["Trial"])
+                medal = medal_trial_map.get(t, "")
+                hover_texts.append(
+                    f"{medal} Trial {t}<br>RMSE: ${row['RMSE']:.2f}"
+                )
 
             fig_conv = go.Figure()
 
-            # All trial dots
             fig_conv.add_trace(go.Scatter(
                 x=trials_df["Trial"],
                 y=trials_df["RMSE"],
                 mode="markers",
                 name="Trial RMSE",
                 marker=dict(
-                    color=[
-                        "#FFD700" if b else "#334155"
-                        for b in is_best
-                    ],
-                    size=[12 if b else 7 for b in is_best],
-                    line=dict(color="#FFD700", width=[2 if b else 0 for b in is_best]),
+                    color=dot_colors,
+                    size=dot_sizes,
+                    line=dict(color="#FFD700", width=dot_borders),
                 ),
-                hovertemplate="Trial %{x}<br>RMSE: $%{y:.2f}<extra></extra>",
+                hovertemplate="%{text}<extra></extra>",
+                text=hover_texts,
             ))
 
-            # Running best line
             fig_conv.add_trace(go.Scatter(
                 x=trials_df["Trial"],
                 y=trials_df["Best So Far"],
@@ -1429,17 +1480,21 @@ with tab5:
                 line=dict(color="#4ade80", width=2, dash="dot"),
             ))
 
-            # Mark the best trial
-            best_row = trials_df[trials_df["Is Best"]].iloc[-1]
-            fig_conv.add_annotation(
-                x=best_row["Trial"], y=best_row["RMSE"],
-                text=f"  Best: ${best_row['RMSE']:.2f}",
-                showarrow=True, arrowhead=2,
-                arrowcolor="#4ade80", font=dict(color="#4ade80", size=11),
-                ax=30, ay=-30,
-            )
+            # Annotate top 3 on the chart
+            annotation_offsets = [(30, -30), (-30, -40), (40, -50)]
+            for i in range(min(3, len(top3))):
+                row = top3.iloc[i]
+                ax, ay = annotation_offsets[i]
+                fig_conv.add_annotation(
+                    x=row["Trial"], y=row["RMSE"],
+                    text=f"{medals[i]} ${row['RMSE']:.2f}",
+                    showarrow=True, arrowhead=2,
+                    arrowcolor=podium_colors[i],
+                    font=dict(color=podium_colors[i], size=10),
+                    ax=ax, ay=ay,
+                )
 
-            layout_conv = gl("", 380)
+            layout_conv = gl("", 400)
             layout_conv.update({
                 "xaxis": {**layout_conv.get("xaxis", {}),
                           "title": "Trial Number", "dtick": 1},
@@ -1468,14 +1523,13 @@ with tab5:
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown('<div class="s-hdr">Full Trial History</div>',
                         unsafe_allow_html=True)
-            st.caption("Every trial Optuna ran, sorted by trial number. "
-                       "🥇 marks the best trial.")
+            st.caption("Every trial Optuna ran. 🥇🥈🥉 mark the top 3 results.")
 
             display_params = params_df.copy()
             display_params.insert(
-                2, "🥇",
+                2, "Rank",
                 display_params["Trial"].apply(
-                    lambda t: "🥇" if t == best_trial else ""
+                    lambda t: medal_trial_map.get(int(t), "")
                 )
             )
             st.dataframe(
