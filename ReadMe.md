@@ -1,6 +1,6 @@
 # 🥇 Gold Price Predictor
 
-![Gold Price Predictor](image.png)
+
 
  **[Live Demo](https://gold-price-prediction-rd.streamlit.app/)**
 
