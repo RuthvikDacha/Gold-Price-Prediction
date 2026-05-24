@@ -26,8 +26,7 @@ from shap_utils  import (get_explainer, compute_shap_values, get_waterfall_data,
 # PAGE SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Gold Price Predictor",
-    page_icon="🥇",
+    page_title="Gold Price Prediction",
     layout="wide",
     initial_sidebar_state="expanded",
 )
